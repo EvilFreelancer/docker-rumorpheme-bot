@@ -1,0 +1,7 @@
+/.git/
+/.idea/
+/venv/
+/.env
+__pycache__
+/rumorpheme_data/
+/docker-compose.yml

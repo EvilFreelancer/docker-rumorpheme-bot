@@ -1,0 +1,6 @@
+FROM python:3.12
+WORKDIR /app
+COPY requirements.txt /app
+RUN pip install --break-system-packages --no-cache-dir -r requirements.txt
+COPY . /app
+ENTRYPOINT ["python3","/app/bot.py"]

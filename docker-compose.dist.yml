@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+
+  rumorpheme-bot:
+    restart: "unless-stopped"
+    build: .
+    environment:
+      BOT_TOKEN: 123:zzz
+      ADMINS_ID: 123
+    volumes:
+    - ./rumorpheme_data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10k"
