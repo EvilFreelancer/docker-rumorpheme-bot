@@ -14,3 +14,10 @@ services:
       driver: "json-file"
       options:
         max-size: "10k"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
