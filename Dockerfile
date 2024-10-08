@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:12.6.1-runtime-ubuntu24.04
 WORKDIR /app
 RUN apt update && apt install -fy python3 python3-pip && apt clean
 COPY requirements.txt /app
