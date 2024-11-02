@@ -1,5 +1,3 @@
-import os
-import sys
 import logging
 import asyncio
 from asyncio import sleep
@@ -7,9 +5,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters import Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 import torch
-from huggingface_hub import hf_hub_download
 from concurrent.futures import ProcessPoolExecutor
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -20,7 +16,8 @@ import re
 import numpy as np
 
 # Импортируем необходимые функции из модели
-from model import Partitioner, prepare_data, labels_to_morphemes
+from rumorpheme.model import RuMorphemeModel
+from rumorpheme.utils import labels_to_morphemes
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -65,9 +62,7 @@ class MessageLog(Base):
 
 # Настройка движка и сессии для базы данных
 engine = create_async_engine(config.DATABASE_URL, echo=False)
-AsyncSessionLocal = sessionmaker(
-    bind=engine, class_=AsyncSession, expire_on_commit=False
-)
+AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 
 async def init_db():
@@ -79,58 +74,14 @@ def load_model():
     # Settings
     model_path = config.MODEL_PATH
 
-    if os.path.isdir(model_path):
-        # Load files from local directory
-        config_file = os.path.join(model_path, "config.json")
-        vocab_file = os.path.join(model_path, "vocab.json")
-        model_file = os.path.join(model_path, "pytorch-model.bin")
-        if not all(os.path.isfile(f) for f in [config_file, vocab_file, model_file]):
-            print("Model files not found in the specified directory.")
-            sys.exit(1)
-    else:
-        # Assume model_path is a Hugging Face repo ID
-        repo_id = model_path
-        config_file = hf_hub_download(repo_id=repo_id, filename="config.json")
-        vocab_file = hf_hub_download(repo_id=repo_id, filename="vocab.json")
-        model_file = hf_hub_download(repo_id=repo_id, filename="pytorch-model.bin")
-
-    # Проверяем наличие файлов модели
-    if not all(os.path.isfile(f) for f in [config_file, vocab_file, model_file]):
-        raise FileNotFoundError("Файлы модели не найдены в указанной директории.")
-
-    # Читаем параметры модели
-    with open(config_file, "r", encoding="utf8") as fin:
-        model_params = json.load(fin)
-
-    # Загружаем словари
-    with open(vocab_file, "rb") as f:
-        vocab_data = json.load(f)
-    symbols = vocab_data["symbols"]
-    symbol_codes = vocab_data["symbol_codes"]
-    target_symbols = vocab_data["target_symbols"]
-    target_symbol_codes = vocab_data["target_symbol_codes"]
-
     # Загружаем модель
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = Partitioner(
-        symbols_number=len(symbols),
-        target_symbols_number=len(target_symbols),
-        params=model_params
-    )
-    model.load_state_dict(torch.load(model_file, map_location=device, weights_only=False))
+    model = RuMorphemeModel.from_pretrained(model_path)
     model.to(device)
     model.eval()
 
     # Сохраняем необходимые данные модели
-    model_data = {
-        'model': model,
-        'symbols': symbols,
-        'symbol_codes': symbol_codes,
-        'target_symbols': target_symbols,
-        'device': device
-    }
-
-    return model_data
+    return model
 
 
 async def update_user_setting(user_id, format=None, use_morpheme_types=None):
@@ -248,17 +199,7 @@ async def handle_group_message(message: Message, bot: Bot):
 
 def process_text(text, format, use_morpheme_types):
     # Обработка текста с учетом настроек пользователя
-    global model_data
-    try:
-        model_data
-    except NameError:
-        model_data = load_model()
-
-    model = model_data['model']
-    symbols = model_data['symbols']
-    symbol_codes = model_data['symbol_codes']
-    target_symbols = model_data['target_symbols']
-    device = model_data['device']
+    model = load_model()
 
     # Препроцессинг текста
     words = text.strip().split()
@@ -277,36 +218,21 @@ def process_text(text, format, use_morpheme_types):
     if not processed_words:
         return "Нет русских слов для обработки.", None
 
-    # Подготовка данных
-    max_word_length = max(len(word) for word in processed_words) + 2  # +2 для BEGIN и END
-    inputs = prepare_data(processed_words, symbol_codes, max_word_length)
-    inputs = torch.tensor(inputs, dtype=torch.long).to(device)
-
     # Прогон модели
-    with torch.no_grad():
-        outputs = model(inputs)
-        log_probs = torch.log_softmax(outputs, dim=-1)
-        predictions = torch.argmax(log_probs, dim=-1).cpu().numpy()
-        log_probs = log_probs.cpu().numpy()
+    all_predictions, all_log_probs = model.predict(processed_words)
 
     # Обработка и форматирование результатов
     results = []
     for idx, word in enumerate(processed_words):
-        pred_seq = predictions[idx]
-        log_prob_seq = log_probs[idx]
-
-        # Пропускаем BEGIN и END токены
-        morphemes, morpheme_types, morpheme_probs = labels_to_morphemes(
-            word,
-            pred_seq[1:-1],
-            log_prob_seq[1:-1],
-            target_symbols,
-            use_morpheme_types='yes'
+        morphs, morph_types, morph_probs = labels_to_morphemes(
+            word.lower(),
+            all_predictions[idx],
+            all_log_probs[idx]
         )
 
         # Собираем морфемы, их типы и вероятности в объекты
         morpheme_list = []
-        for morpheme, morpheme_type, morpheme_prob in zip(morphemes, morpheme_types, morpheme_probs):
+        for morpheme, morpheme_type, morpheme_prob in zip(morphs, morph_types, morph_probs):
             morpheme_info = {"text": morpheme}
             morpheme_info["type"] = morpheme_type
             morpheme_info["prob"] = str(np.round(morpheme_prob, 2))

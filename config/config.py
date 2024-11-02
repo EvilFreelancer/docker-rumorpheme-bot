@@ -1,12 +1,9 @@
 import os
 from typing import List
 from dataclasses import dataclass, field
-from dotenv import load_dotenv
-from .base import getenv
 from environs import Env
 
-env = Env()
-env.read_env()
+from .base import getenv
 
 
 @dataclass
@@ -19,5 +16,6 @@ class Config:
 
 
 def load_config() -> Config:
-    load_dotenv()
+    env = Env()
+    env.read_env()
     return Config()
